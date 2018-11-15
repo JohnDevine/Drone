@@ -9,6 +9,8 @@
 #include <WiFiUdp.h>
 #include <esp_wifi.h>
 
+#include <helperDebug.h>
+
 #define OnBoardLedPin 2
 const char* ssid = "SolarSky";//AP ssid
 const char* password = "12345678A";//AP password
@@ -16,6 +18,11 @@ const char* password = "12345678A";//AP password
 WiFiUDP udp;
 int udpReadCount = 0;
 char udpMessage [256];
+const uint16_t remotePortIDDefault = 888;
+int loopCount = 0;
+long rssi = 0;
+
+helperDebug debugIt;
 
 const char *toStr( wl_status_t status ) {
         switch( status ) {
@@ -35,7 +42,9 @@ void setup() {
         Serial.begin( 115200 );
         Serial.setDebugOutput(true);
         Serial.println( "Slave" );
-        pinMode(OnBoardLedPin, OUTPUT);//bultin Led, for debug
+        pinMode(OnBoardLedPin, OUTPUT);        //bultin Led, for debug
+        debugIt.blinkIt(OnBoardLedPin, 4, 1000);
+
 
         //We start STA mode with LR protocol
         //This ssid is not visible whith our regular devices
@@ -71,7 +80,7 @@ void setup() {
         Serial.print("IP address: ");
         Serial.println(WiFi.localIP());
 
-        udp.begin( 8888 );
+        udp.begin( remotePortIDDefault );
 }
 
 void loop() {
@@ -92,19 +101,24 @@ void loop() {
                 Serial.println( WiFi.localIP() );
         }
         //if connection OK, execute command 'b' from master
-        int size = udp.parsePacket();
-        if ( size == 0 )
-                return;
-        // char c = udp.read();
-        udpReadCount = udp.read(udpMessage, 255);
 
-        if ( udpReadCount > 0 ) {
-                digitalWrite(OnBoardLedPin, !digitalRead(OnBoardLedPin));//toggle Led
-                Serial.print("RECEIVED = ");
-                Serial.println(udpMessage);
+        udp.beginPacket( { 192, 168, 4, 2 }, remotePortIDDefault );      //send a  message
+        // udp.beginPacket( { 192, 168, 4, 255 }, 8888 );//send a broadcast message
+        sprintf(udpMessage, "Count = %d", ++loopCount);
+        udp.write((uint8_t *)udpMessage, strlen(udpMessage));
+        // udp.write( 'b' );//the payload
+        digitalWrite(OnBoardLedPin, !digitalRead(OnBoardLedPin));
+        rssi = WiFi.RSSI();
+        Serial.print("RSSI = ");
+        Serial.println(rssi);
 
-        } else {
-                Serial.println("RECEIVED but no data");
+        if ( !udp.endPacket() ) {
+                Serial.println("NOT SEND!");
+                delay(100);
+                // ESP.restart(); // When the connection is bad, the TCP stack refuses to work
         }
-        udp.flush();
+        else{
+                Serial.print("SENT IT!! ");
+                Serial.println(udpMessage);
+        }
 }
