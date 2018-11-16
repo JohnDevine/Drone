@@ -10,6 +10,7 @@
 ** 1 blink as temp successfully sent to Server
 **/
 
+
 #include "ArduinoTrace.h"
 #include <Wire.h>
 #include <HTU21D.h>
@@ -34,6 +35,7 @@ const char* mqttUser = "yourInstanceUsername";
 const char* mqttPassword = "yourInstancePassword";
 const char* mqttTempTopic = "SolarBlue/engine/alternator/temp";
 const char* mqttHumidTopic = "SolarBlue/engine/alternator/humid";
+const char* mqttVoltsTopic = "SolarBlue/engine/alternator/volts";
 const char* mqttFanTopic = "SolarBlue/engine/alternator/fan"; // topic to turn on relay
 const int mqttMaxRetries = 20;
 
@@ -42,6 +44,11 @@ const int htu21dMaxRetries = 10;
 const int htuSda = 21;
 const int htuScl = 22;
 HTU21D myHTU21D(HTU21D_RES_RH12_TEMP14);
+
+// ADC Paramaters
+// GPIO 36 = VP .. typical input
+// GPIO 39 = VN .. typical input
+#define voltagePin 36
 
 void blinkIt(int ledPin, int numberBlinks, int delayMs) {
         pinMode(ledPin, OUTPUT);//builtin Led, for  debug
@@ -58,6 +65,56 @@ void blinkIt(int ledPin, int numberBlinks, int delayMs) {
         }
 
 }
+
+// ADC information
+// GPIO 36 = VP .. typical input
+// GPIO 39 = VN .. typical input
+// Maximum pin voltage is 3.3V
+/*
+   analogReadResolution(12);             // Sets the sample bits and read resolution, default is 12-bit (0 - 4095), range is 9 - 12 bits
+   analogSetWidth(12);                   // Sets the sample bits and read resolution, default is 12-bit (0 - 4095), range is 9 - 12 bits
+                                      //  9-bit gives an ADC range of 0-511
+                                      // 10-bit gives an ADC range of 0-1023
+                                      // 11-bit gives an ADC range of 0-2047
+                                      // 12-bit gives an ADC range of 0-4095
+   analogSetCycles(8);                   // Set number of cycles per sample, default is 8 and provides an optimal result, range is 1 - 255
+   analogSetSamples(1);                  // Set number of samples in the range, default is 1, it has an effect on sensitivity has been multiplied
+   analogSetClockDiv(1);                 // Set the divider for the ADC clock, default is 1, range is 1 - 255
+   analogSetAttenuation(ADC_11db);       // Sets the input attenuation for ALL ADC inputs, default is ADC_11db, range is ADC_0db, ADC_2_5db, ADC_6db, ADC_11db
+   analogSetPinAttenuation(VP,ADC_11db); // Sets the input attenuation, default is ADC_11db, range is ADC_0db, ADC_2_5db, ADC_6db, ADC_11db
+                                      // ADC_0db provides no attenuation so IN/OUT = 1 / 1 an input of 3 volts remains at 3 volts before ADC measurement
+                                      // ADC_2_5db provides an attenuation so that IN/OUT = 1 / 1.34 an input of 3 volts is reduced to 2.238 volts before ADC measurement
+                                      // ADC_6db provides an attenuation so that IN/OUT = 1 / 2 an input of 3 volts is reduced to 1.500 volts before ADC measurement
+                                      // ADC_11db provides an attenuation so that IN/OUT = 1 / 3.6 an input of 3 volts is reduced to 0.833 volts before ADC measurement
+   adcAttachPin(VP);                     // Attach a pin to ADC (also clears any other analog mode that could be on), returns TRUE/FALSE result
+   adcStart(VP);                         // Starts an ADC conversion on attached pin's bus
+   adcBusy(VP);                          // Check if conversion on the pin's ADC bus is currently running, returns TRUE/FALSE result
+   adcEnd(VP);                           // Get the result of the conversion (will wait if it have not finished), returns 16-bit integer result
+ */
+
+void setupADC(){
+
+}
+double readADC(byte pin){
+        double reading = analogRead(pin); // Reference voltage is 3v3 so maximum reading is 3v3 = 4095 in range 0 to 4095
+        if(reading < 1 || reading > 4095) return 0;
+        // return -0.000000000009824 * pow(reading,3) + 0.000000016557283 * pow(reading,2) + 0.000854596860691 * reading + 0.065440348345433;
+        return -0.000000000000016 * pow(reading,4) + 0.000000000118171 * pow(reading,3)- 0.000000301211691 * pow(reading,2)+ 0.001109019271794 * reading + 0.034143524634089;
+} // Added an improved polynomial, use either, comment out as required
+
+
+/* ADC readings v voltage
+ *  y = -0.000000000009824x3 + 0.000000016557283x2 + 0.000854596860691x + 0.065440348345433
+   // Polynomial curve match, based on raw data thus:
+ *   464     0.5
+ *  1088     1.0
+ *  1707     1.5
+ *  2331     2.0
+ *  2951     2.5
+ *  3775     3.0
+ *
+ */
+
 /*
    HTU21D(resolution)
 
@@ -67,7 +124,6 @@ void blinkIt(int ledPin, int numberBlinks, int delayMs) {
    HTU21D_RES_RH10_TEMP13 - RH: 10Bit, Temperature: 13Bit
    HTU21D_RES_RH11_TEMP11 - RH: 11Bit, Temperature: 11Bit
  */
-
 
 void setupHDU21D(int sda, int scl) {
         TRACE();
@@ -132,24 +188,24 @@ void conMQTT(PubSubClient client, const char *server, int port) {
         client.setServer(mqttServer, mqttPort);
         int mqttRetries = mqttMaxRetries;
         while (!client.connected()) {
-          if (mqttRetries-- > 0) {
-               blinkIt(LED, 3, 0); // indicate waiting for WiFi
-                Serial.println("Connecting to MQTT...");
+                if (mqttRetries-- > 0) {
+                        blinkIt(LED, 3, 0); // indicate waiting for WiFi
+                        Serial.println("Connecting to MQTT...");
 
-                if (client.connect("ESP32Client", mqttUser, mqttPassword )) {
+                        if (client.connect("ESP32Client", mqttUser, mqttPassword )) {
 
-                        Serial.println("MQTT connected");
+                                Serial.println("MQTT connected");
 
+                        } else {
+
+                                Serial.print("MQTT failed with state ");
+                                Serial.print(client.state());
+                                delay(2000);
+                        }
                 } else {
-
-                        Serial.print("MQTT failed with state ");
-                        Serial.print(client.state());
-                        delay(2000);
+                        Serial.println("Could NOT connect to MQTT..");
+                        ESP.restart();
                 }
-              } else {
-                Serial.println("Could NOT connect to MQTT..");
-                ESP.restart();
-              }
         }
 
 }
@@ -219,17 +275,17 @@ void loop() {
         temperatureRead = myHTU21D.readTemperature(HTU21D_TRIGGER_TEMP_MEASURE_NOHOLD);
         int htu21dRetries = htu21dMaxRetries;
         while (temperatureRead == 255) {
-          if (htu21dRetries-- > 0) {
-                  blinkIt(LED, 5, 0); // indicate bad sensor read
-                  TRACE();
-                  delay(200);
-          } else {
-                  Serial.println("Could NOT read The Temp Sensor..");
+                if (htu21dRetries-- > 0) {
+                        blinkIt(LED, 5, 0); // indicate bad sensor read
+                        TRACE();
+                        delay(200);
+                } else {
+                        Serial.println("Could NOT read The Temp Sensor..");
 
-                  ESP.restart();
-          }
+                        ESP.restart();
+                }
 
-          myHTU21D.readTemperature(HTU21D_TRIGGER_TEMP_MEASURE_NOHOLD);
+                myHTU21D.readTemperature(HTU21D_TRIGGER_TEMP_MEASURE_NOHOLD);
         }
         // Serial.print(F("Compensated Humidity: "));
         // Serial.print(myHTU21D.readHumidity());
@@ -283,8 +339,18 @@ void loop() {
         //         blinkIt(LED, 4, 0); //Blink LED to show we failed to send
         //}
 
+        // Get the voltage
+        readADC(voltagePin);
+        
+        JSONencoder["Value"] = readADC(voltagePin);
+        JSONencoder.printTo(JSONmessageBuffer, sizeof(JSONmessageBuffer));
+        if (MQTTclient.publish(mqttVoltsTopic, JSONmessageBuffer) == true) {
+                Serial.println("Success sending volts message");
+        } else {
+                Serial.println("Error sending volts message");
+        }
 
-blinkIt(LED, 1, 0);  // Blink once every message sent
+        blinkIt(LED, 1, 0); // Blink once every message sent
         Serial.println("-------------");
 
         for (int i=0; i<5; i++) {
